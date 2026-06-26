@@ -14,7 +14,7 @@ pub fn main() !void {
     while (true) {
         const c = try terminal.readKey();
 
-        if (c == 'q') break;
+        if (c == ctrlKey('q')) break;
 
         // display numeric value and display the char if printable
         if (std.ascii.isControl(c)) {
@@ -23,4 +23,8 @@ pub fn main() !void {
             std.debug.print("{d} ('{c}')\r\n", .{ c, c });
         }
     }
+}
+
+fn ctrlKey(comptime c: u8) u8 {
+    return c & 0x1f;
 }

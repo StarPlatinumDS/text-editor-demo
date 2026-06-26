@@ -25,7 +25,9 @@ pub fn processKeypress() !bool {
     return true;
 }
 
-pub fn refreshScreen() !void {
-    try posix.writeAll(terminal.stdout_fd, "\x1b[2J");
-    try terminal.writeAll(terminal.stdout_fd, "\x1b[H");
+pub fn refreshScreen(init: std.process.Init) !void {
+    try std.Io.File.stdout().writeStreamingAll(
+        init.io,
+        "\x1b[2J\x1b[HText editor refresh\r\n",
+    );
 }

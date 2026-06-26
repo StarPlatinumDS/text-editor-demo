@@ -24,8 +24,8 @@ pub fn refreshScreen(init: std.process.Init) !void {
     const stdout = std.Io.File.stdout();
     const screen_size = try terminal.getWindowSize();
 
-    // Clear the entire screen
-    try stdout.writeStreamingAll(init.io, "\x1b[2J");
+    // Hide cursor while redrawing the screen.
+    try stdout.writeStreamingAll(init.io, "\x1b[?25l");
 
     // Move cursor to the top-left
     try stdout.writeStreamingAll(init.io, "\x1b[H");
@@ -34,6 +34,9 @@ pub fn refreshScreen(init: std.process.Init) !void {
 
     // Move cursor back to top-left
     try stdout.writeStreamingAll(init.io, "\x1b[H");
+
+    // Show cursor again after refresh.
+    try stdout.writeStreamingAll(init.io, "\x1b[?25l");
 }
 
 // ....
@@ -43,6 +46,9 @@ fn drawRows(init: std.process.Init, rows: usize) !void {
     var y: usize = 0;
     while (y < rows) : (y += 1) {
         try stdout.writeStreamingAll(init.io, "~");
+
+        // clear the restof the line
+        try stdout.writeStreamingAll(init.io, "\x1b[K");
 
         // this is needed so that terminal doesn't scroll
         // by one line after end

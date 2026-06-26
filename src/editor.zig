@@ -24,36 +24,42 @@ pub fn refreshScreen(init: std.process.Init) !void {
     const stdout = std.Io.File.stdout();
     const screen_size = try terminal.getWindowSize();
 
-    // Hide cursor while redrawing the screen.
-    try stdout.writeStreamingAll(init.io, "\x1b[?25l");
+    // instead of callin writeStreamingAll multiple ties
+    // append all commands to call them once
+    var append_buf: std.ArrayList(u8) = .empty;
+    defer append_buf.deinit(init.gpa);
+
+    // Hide cursor
+    try append_buf.appendSlice(init.gpa, "\x1b[?25l");
 
     // Move cursor to the top-left
-    try stdout.writeStreamingAll(init.io, "\x1b[H");
+    try append_buf.appendSlice(init.gpa, "\x1b[H");
 
-    try drawRows(init, screen_size.rows);
+    try drawRows(init.gpa, &append_buf, screen_size.rows);
 
     // Move cursor back to top-left
-    try stdout.writeStreamingAll(init.io, "\x1b[H");
+    try append_buf.appendSlice(init.gpa, "\x1b[H");
 
-    // Show cursor again after refresh.
-    try stdout.writeStreamingAll(init.io, "\x1b[?25l");
+    // show cursor again
+    try append_buf.appendSlice(init.gpa, "\x1b[?25h");
+
+    // write the complete screen update at once
+    try stdout.writeStreamingAll(init.io, append_buf.items);
 }
 
 // ....
-fn drawRows(init: std.process.Init, rows: usize) !void {
-    const stdout = std.Io.File.stdout();
-
+fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), rows: usize) !void {
     var y: usize = 0;
     while (y < rows) : (y += 1) {
-        try stdout.writeStreamingAll(init.io, "~");
+        try append_buffer.appendSlice(allocator, "~");
 
         // clear the restof the line
-        try stdout.writeStreamingAll(init.io, "\x1b[K");
+        try append_buffer.appendSlice(allocator, "\x1b[K");
 
         // this is needed so that terminal doesn't scroll
         // by one line after end
-        if (y < rows - 1) {
-            try stdout.writeStreamingAll(init.io, "\r\n");
+        if (y + 1 < rows) {
+            try append_buffer.appendSlice(allocator, "\r\n");
         }
     }
 }

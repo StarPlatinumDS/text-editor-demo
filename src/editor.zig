@@ -15,19 +15,29 @@ pub fn processKeypress() !bool {
         else => {},
     }
 
-    // temporary part
-    if (std.ascii.isControl(c)) {
-        std.debug.print("{d}\r\n", .{c});
-    } else {
-        std.debug.print("{d} ('{c}')\r\n", .{ c, c });
-    }
-
     return true;
 }
 
 pub fn refreshScreen(init: std.process.Init) !void {
-    try std.Io.File.stdout().writeStreamingAll(
-        init.io,
-        "\x1b[2J\x1b[HText editor refresh\r\n",
-    );
+    const stdout = std.Io.File.stdout();
+
+    // Clear the entire screen
+    try stdout.writeStreamingAll(init.io, "\x1b[2J");
+
+    // Move cursor to the top-left
+    try stdout.writeStreamingAll(init.io, "\x1b[H");
+
+    try drawRows(init);
+
+    // Move cursor back to top-left
+    try stdout.writeStreamingAll(init.io, "\x1b[H");
+}
+
+fn drawRows(init: std.process.Init) !void {
+    const stdout = std.Io.File.stdout();
+
+    var y: usize = 0;
+    while (y < 24) : (y += 1) {
+        try stdout.writeStreamingAll(init.io, "~\r\n");
+    }
 }

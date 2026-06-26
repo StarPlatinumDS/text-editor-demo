@@ -1,8 +1,5 @@
-const std = @import("std");
-// add posix def
-const posix = std.posix;
-
 const terminal = @import("terminal.zig");
+const editor = @import("editor.zig");
 
 pub fn main() !void {
     // enable raw mode
@@ -10,21 +7,9 @@ pub fn main() !void {
     // restore terminal before main exits
     defer raw.restore();
 
-    // read up to 1 byte from stdin into buf.
     while (true) {
-        const c = try terminal.readKey();
+        const keep_running = try editor.processKeypress();
 
-        if (c == ctrlKey('q')) break;
-
-        // display numeric value and display the char if printable
-        if (std.ascii.isControl(c)) {
-            std.debug.print("{d}\r\n", .{c});
-        } else {
-            std.debug.print("{d} ('{c}')\r\n", .{ c, c });
-        }
+        if (!keep_running) break;
     }
-}
-
-fn ctrlKey(comptime c: u8) u8 {
-    return c & 0x1f;
 }

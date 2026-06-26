@@ -1,14 +1,15 @@
 const std = @import("std");
 const posix = std.posix;
 
-// system's API
-pub const stdin_fd: posix.fd_t = 0;
-
-// RawMode owns the terminal state change
 // Unix/POSIX convention:
 //   0 = stdin
 //   1 = stdout
 //   2 = stderr
+// system's API
+pub const stdin_fd: posix.fd_t = 0;
+pub const stdout_fd: posix.fd_t = 1;
+
+// RawMode owns the terminal state change
 pub const RawMode = struct {
     fd: posix.fd_t,
     original: posix.termios,
@@ -65,5 +66,14 @@ pub fn readKey() !u8 {
         if (n == 0) continue;
 
         return buf[0];
+    }
+}
+
+pub fn writeAll(fd: posix.fd_t, bytes: []const u8) !void {
+    var remaining = bytes;
+
+    while (remaining.len > 0) {
+        const written = try posix.write(fd, remaining);
+        remaining = remaining[written..];
     }
 }

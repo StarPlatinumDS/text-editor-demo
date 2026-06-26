@@ -4,7 +4,11 @@ const posix = std.posix;
 // system's API
 pub const stdin_fd: posix.fd_t = 0;
 
-// ....
+// RawMode owns the terminal state change
+// Unix/POSIX convention:
+//   0 = stdin
+//   1 = stdout
+//   2 = stderr
 pub const RawMode = struct {
     fd: posix.fd_t,
     original: posix.termios,
@@ -13,11 +17,28 @@ pub const RawMode = struct {
         const original = try posix.tcgetattr(fd);
         var raw = original;
 
-        // turn off echo and icanon
+        // turn off echo, icanon, ISIG, IEXTEN
         raw.lflag.ECHO = false;
         raw.lflag.ICANON = false;
+        raw.lflag.ISIG = false;
+        raw.lflag.IEXTEN = false;
 
-        // ....
+        // disable Ctrl-S / Ctrl-Q
+        raw.iflag.IXON = false;
+        // disable '\r' to '\n'
+        raw.iflag.ICRNL = false;
+        // disable break condition
+        raw.iflag.BRKINT = false;
+        // disable parity checking
+        raw.iflag.INPCK = false;
+        // disable stripping 8th bit from each input byte
+        raw.iflag.ISTRIP = false;
+        // use 8-bit characters
+        raw.cflag.CSIZE = .CS8;
+        // disable output post-processing
+        raw.oflag.OPOST = false;
+
+        // Apply the modified terminal settings.
         try posix.tcsetattr(fd, posix.TCSA.FLUSH, raw);
 
         return .{

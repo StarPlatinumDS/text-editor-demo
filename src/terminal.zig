@@ -9,7 +9,23 @@ const posix = std.posix;
 pub const stdin_fd: posix.fd_t = 0;
 pub const stdout_fd: posix.fd_t = 1;
 
-// ....
+// A keypress is not always just one byte.
+// examples: 'a', 'q', '\r', 'ESC [ A' -> three bytes
+// to address that I return Key union instead of u8
+pub const Key = union(enum) {
+    // normal keypress
+    char: u8,
+    // simply ESC or an unrecognized input
+    escape,
+
+    // arrow key sequences
+    arrow_left,
+    arrow_right,
+    arrow_up,
+    arrow_down,
+};
+
+// WindowSize is a wrapper around terminal's window size
 pub const WindowSize = struct {
     rows: usize,
     cols: usize,
@@ -17,6 +33,7 @@ pub const WindowSize = struct {
 
 // ....
 pub fn getWindowSize() !WindowSize {
+    // posix.winsize is the OS-level struct filled by ioctl()
     var ws: posix.winsize = .{
         .row = 0,
         .col = 0,
@@ -28,14 +45,19 @@ pub fn getWindowSize() !WindowSize {
     const result = posix.system.ioctl(
         stdout_fd,
         posix.T.IOCGWINSZ,
+        // send an adress of ws to ioctl
         @intFromPtr(&ws),
     );
 
-    // ....
+    // ioctl reports success/failure through an errno-style result
+    // Also reject row/col == 0 because a zero-sized terminal would make later
+    // cursor math invalid
     if (posix.errno(result) != .SUCCESS or ws.row == 0 or ws.col == 0) {
-        return error.WindowSizeUnavaible;
+        return error.WindowSizeUnavailable;
     }
 
+    // Convert from the OS integer type to usize because the editor uses usize
+    // for indexes and loop counters
     return .{
         .rows = @intCast(ws.row),
         .cols = @intCast(ws.col),
@@ -84,20 +106,58 @@ pub const RawMode = struct {
         };
     }
 
-    // ....
+    // Restore the terminal settings we saved before entering raw mode.
     pub fn restore(self: RawMode) void {
         posix.tcsetattr(self.fd, posix.TCSA.FLUSH, self.original) catch {};
     }
 };
 
-pub fn readKey() !u8 {
+// ....
+pub fn readKey() !Key {
     var buf: [1]u8 = undefined;
 
     while (true) {
+        // Read one byte from stdin
+
+        // In raw mode keypress is read instantly, no wait for Enter
         const n = try posix.read(stdin_fd, buf[0..]);
 
+        // timeout allowed
         if (n == 0) continue;
 
-        return buf[0];
+        // char from input
+        const c = buf[0];
+
+        // arrows and other special chars begin w/ esc
+        if (c == 0x1b) {
+            var seq: [2]u8 = undefined;
+
+            // try to acntch esc + char
+
+            //if no char after esc  standalone esc
+            const n1 = try posix.read(stdin_fd, seq[0..1]);
+            if (n1 == 0) return .escape;
+
+            // if I can read third byte (which is most likely an arrow)
+            const n2 = try posix.read(stdin_fd, seq[1..2]);
+            if (n2 == 0) return .escape;
+
+            // CSI sequence for arrow keys
+            if (seq[0] == '[') {
+                switch (seq[1]) {
+                    'A' => return .arrow_up,
+                    'B' => return .arrow_down,
+                    'C' => return .arrow_right,
+                    'D' => return .arrow_left,
+                    else => {},
+                }
+            }
+
+            // this is return for a simple esc
+            return .escape;
+        }
+
+        // return for a regular char
+        return .{ .char = c };
     }
 }

@@ -7,6 +7,40 @@ const posix = std.posix;
 //   2 = stderr
 // system's API
 pub const stdin_fd: posix.fd_t = 0;
+pub const stdout_fd: posix.fd_t = 1;
+
+// ....
+pub const WindowSize = struct {
+    rows: usize,
+    cols: usize,
+};
+
+// ....
+pub fn getWindowSize() !WindowSize {
+    var ws: posix.winsize = .{
+        .row = 0,
+        .col = 0,
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+
+    // get window size
+    const result = posix.system.ioctl(
+        stdout_fd,
+        posix.T.IOCGWINSZ,
+        @intFromPtr(&ws),
+    );
+
+    // ....
+    if (posix.errno(result) != .SUCCESS or ws.row == 0 or ws.col == 0) {
+        return error.WindowSizeUnavaible;
+    }
+
+    return .{
+        .rows = @intCast(ws.row),
+        .cols = @intCast(ws.col),
+    };
+}
 
 // RawMode owns the terminal state change
 pub const RawMode = struct {

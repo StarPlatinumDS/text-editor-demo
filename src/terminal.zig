@@ -38,6 +38,9 @@ pub const RawMode = struct {
         // disable output post-processing
         raw.oflag.OPOST = false;
 
+        raw.cc[@intFromEnum(posix.V.MIN)] = 0;
+        raw.cc[@intFromEnum(posix.V.TIME)] = 1;
+
         // Apply the modified terminal settings.
         try posix.tcsetattr(fd, posix.TCSA.FLUSH, raw);
 
@@ -52,3 +55,15 @@ pub const RawMode = struct {
         posix.tcsetattr(self.fd, posix.TCSA.FLUSH, self.original) catch {};
     }
 };
+
+pub fn readKey() !u8 {
+    var buf: [1]u8 = undefined;
+
+    while (true) {
+        const n = try posix.read(stdin_fd, buf[0..]);
+
+        if (n == 0) continue;
+
+        return buf[0];
+    }
+}

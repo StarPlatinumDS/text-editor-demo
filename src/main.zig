@@ -10,18 +10,9 @@ pub fn main() !void {
     // restore terminal before main exits
     defer raw.restore();
 
-    // a buffer to hold keypress
-    var buf: [1]u8 = undefined;
-
     // read up to 1 byte from stdin into buf.
     while (true) {
-        // number of bytes actually read
-        const n = try posix.read(terminal.stdin_fd, buf[0..]);
-
-        // n == 0 means EOF, no more input
-        if (n == 0) break;
-
-        const c = buf[0];
+        const c = try terminal.readKey();
 
         if (c == 'q') break;
 

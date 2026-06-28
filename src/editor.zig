@@ -49,6 +49,29 @@ pub fn processKeypress() !bool {
             cursor_y += 1;
         },
 
+        // up/down
+        .page_up => {
+            cursor_y = 0;
+        },
+
+        .page_down => {
+            const screen_size = try terminal.getWindowSize();
+            cursor_y = screen_size.rows - 1;
+        },
+
+        // home/end
+        .home => {
+            cursor_x = 0;
+        },
+
+        .end => {
+            const screen_size = try terminal.getWindowSize();
+            cursor_x = screen_size.cols - 1;
+        },
+
+        //delete
+        .delete => {},
+
         // ignore regular esc for now
         .escape => {},
     }

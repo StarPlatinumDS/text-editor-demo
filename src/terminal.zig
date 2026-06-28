@@ -23,6 +23,13 @@ pub const Key = union(enum) {
     arrow_right,
     arrow_up,
     arrow_down,
+
+    // special row keys
+    page_up,
+    page_down,
+    home,
+    end,
+    delete,
 };
 
 // WindowSize is a wrapper around terminal's window size
@@ -130,7 +137,7 @@ pub fn readKey() !Key {
 
         // arrows and other special chars begin w/ esc
         if (c == 0x1b) {
-            var seq: [2]u8 = undefined;
+            var seq: [3]u8 = undefined;
 
             // try to acntch esc + char
 
@@ -144,11 +151,37 @@ pub fn readKey() !Key {
 
             // CSI sequence for arrow keys
             if (seq[0] == '[') {
+                if (seq[1] >= '0' and seq[1] <= '9') {
+                    const n3 = try posix.read(stdin_fd, seq[2..3]);
+                    if (n3 == 0) return .escape;
+
+                    if (seq[2] == '~') {
+                        switch (seq[1]) {
+                            '1' => return .home,
+                            '3' => return .delete,
+                            '4' => return .end,
+                            '5' => return .page_up,
+                            '6' => return .page_down,
+                            '7' => return .home,
+                            '8' => return .end,
+                            else => {},
+                        }
+                    }
+                } else {
+                    switch (seq[1]) {
+                        'A' => return .arrow_up,
+                        'B' => return .arrow_down,
+                        'C' => return .arrow_right,
+                        'D' => return .arrow_left,
+                        'H' => return .home,
+                        'F' => return .end,
+                        else => {},
+                    }
+                }
+            } else if (seq[0] == 'O') {
                 switch (seq[1]) {
-                    'A' => return .arrow_up,
-                    'B' => return .arrow_down,
-                    'C' => return .arrow_right,
-                    'D' => return .arrow_left,
+                    'H' => return .home,
+                    'F' => return .end,
                     else => {},
                 }
             }

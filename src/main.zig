@@ -8,6 +8,8 @@ pub fn main(init: std.process.Init) !void {
     // restore terminal before main exits
     defer raw.restore();
 
+    try std.Io.File.stdout().writeStreamingAll(init.io, "\x1b[?1049h");
+
     while (true) {
         try editor.refreshScreen(init);
 

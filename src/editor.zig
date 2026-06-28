@@ -5,6 +5,24 @@ const terminal = @import("terminal.zig");
 var cursor_x: usize = 0;
 var cursor_y: usize = 0;
 
+const Row = struct {
+    chars: []u8,
+
+    fn deinit(self: Row, allocator: std.mem.Allocator) void {
+        allocator.free(self.chars);
+    }
+};
+
+var rows: std.ArrayList(Row) = .empty;
+
+pub fn deinit(allocator: std.mem.Allocator) void {
+    for (rows.items) |row| {
+        row.deinit(allocator);
+    }
+
+    rows.deinit(allocator);
+}
+
 // return an obscure ASCII representation of Ctrl + Q if 'q' is passed
 fn ctrlKey(comptime c: u8) u8 {
     return c & 0x1f;
@@ -25,29 +43,11 @@ pub fn processKeypress() !bool {
             }
         },
 
-        .arrow_left => {
-            // prevent moving left after screen edge
-            if (cursor_x > 0) {
-                cursor_x -= 1;
-            }
-        },
-
-        // needs loop logic
-        .arrow_right => {
-            cursor_x += 1;
-        },
-
-        .arrow_up => {
-            // prevent from moving above top row
-            if (cursor_y > 0) {
-                cursor_y -= 1;
-            }
-        },
-
-        // need limit logic
-        .arrow_down => {
-            cursor_y += 1;
-        },
+        .arrow_left,
+        .arrow_right,
+        .arrow_up,
+        .arrow_down,
+        => try moveCursor(key),
 
         // up/down
         .page_up => {
@@ -78,6 +78,47 @@ pub fn processKeypress() !bool {
 
     // means editor is runnign
     return true;
+}
+
+fn moveCursor(key: terminal.Key) !void {
+    const screen_size = try terminal.getWindowSize();
+
+    switch (key) {
+        .arrow_left => {
+            // prevent moving left after screen edge
+            if (cursor_x > 0) {
+                cursor_x -= 1;
+            } else if (cursor_y > 0) {
+                cursor_y -= 1;
+                cursor_x = screen_size.cols - 1;
+            }
+        },
+
+        // loop logic
+        .arrow_right => {
+            if (cursor_x + 1 < screen_size.cols) {
+                cursor_x += 1;
+            } else if (cursor_y + 1 < screen_size.rows) {
+                cursor_y += 1;
+                cursor_x = 0;
+            }
+        },
+
+        .arrow_up => {
+            // prevent from moving above top row
+            if (cursor_y > 0) {
+                cursor_y -= 1;
+            }
+        },
+
+        // need limit logic
+        .arrow_down => {
+            if (cursor_y + 1 < screen_size.rows)
+                cursor_y += 1;
+        },
+
+        else => {},
+    }
 }
 
 // ....
@@ -129,12 +170,19 @@ pub fn refreshScreen(init: std.process.Init) !void {
 fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), screen_size: terminal.WindowSize) !void {
     var y: usize = 0;
     while (y < screen_size.rows) : (y += 1) {
-        // draw welcome message 1/3 down the screen
-        if (y == screen_size.rows / 3) {
-            try drawWelcome(allocator, append_buffer, screen_size.cols);
+        if (y < rows.items.len) {
+            const row = rows.items[y];
+            const len = @min(row.chars.len, screen_size.cols);
+
+            try append_buffer.appendSlice(allocator, row.chars[0..len]);
         } else {
-            // empty rows are shown with "~"
-            try append_buffer.appendSlice(allocator, "~");
+            // draw welcome message 1/3 down the screen
+            if (rows.items.len == 0 and y == screen_size.rows / 3) {
+                try drawWelcome(allocator, append_buffer, screen_size.cols);
+            } else {
+                // empty rows are shown with "~"
+                try append_buffer.appendSlice(allocator, "~");
+            }
         }
 
         // clear the restof the line
@@ -170,4 +218,18 @@ fn drawWelcome(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), 
 
     // draw full or truncated version
     try append_buffer.appendSlice(allocator, welcome[0..welcome_len]);
+}
+
+pub fn openTestRows(allocator: std.mem.Allocator) !void {
+    try appendRow(allocator, "First loaded row");
+    try appendRow(allocator, "Second loaded row");
+    try appendRow(allocator, "Third loaded row");
+}
+
+fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
+    const owned_chars = try allocator.dupe(u8, line);
+
+    try rows.append(allocator, .{
+        .chars = owned_chars,
+    });
 }

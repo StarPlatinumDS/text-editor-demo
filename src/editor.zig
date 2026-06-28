@@ -34,7 +34,7 @@ fn ctrlKey(comptime c: u8) u8 {
 
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
-pub fn processKeypress() !bool {
+pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
     // read one character from input, it may be 'a' or 'ESC [ A'
     const key = try terminal.readKey();
 
@@ -51,11 +51,10 @@ pub fn processKeypress() !bool {
         .arrow_right,
         .arrow_up,
         .arrow_down,
-        => try moveCursor(key),
+        => moveCursor(key, screen_size),
 
         // up/down
         .page_up => {
-            const screen_size = try terminal.getWindowSize();
             if (cursor_y > screen_size.rows) {
                 cursor_y -= screen_size.rows;
             } else {
@@ -64,8 +63,6 @@ pub fn processKeypress() !bool {
         },
 
         .page_down => {
-            const screen_size = try terminal.getWindowSize();
-
             if (rows.items.len > 0) {
                 cursor_y = @min(cursor_y + screen_size.rows, rows.items.len - 1);
             }
@@ -74,11 +71,14 @@ pub fn processKeypress() !bool {
         // home/end
         .home => {
             cursor_x = 0;
+            cursor_y = 0;
+            rowoff = 0;
         },
 
         .end => {
-            const screen_size = try terminal.getWindowSize();
-            cursor_x = screen_size.cols - 1;
+            if (screen_size.cols > 0) {
+                cursor_x = screen_size.cols - 1;
+            }
         },
 
         //delete
@@ -92,9 +92,7 @@ pub fn processKeypress() !bool {
     return true;
 }
 
-fn moveCursor(key: terminal.Key) !void {
-    const screen_size = try terminal.getWindowSize();
-
+fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
     switch (key) {
         .arrow_left => {
             // prevent moving left after screen edge
@@ -137,11 +135,8 @@ fn moveCursor(key: terminal.Key) !void {
 }
 
 // ....
-pub fn refreshScreen(init: std.process.Init) !void {
+pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !void {
     const stdout = std.Io.File.stdout();
-
-    // get terminal size every refresh
-    const screen_size = try terminal.getWindowSize();
 
     editorScroll(screen_size);
 

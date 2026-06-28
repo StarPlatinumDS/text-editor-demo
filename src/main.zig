@@ -21,9 +21,11 @@ pub fn main(init: std.process.Init) !void {
     defer stdout.writeStreamingAll(init.io, "\x1b[?25h\x1b[?1049l") catch {};
 
     while (true) {
-        try editor.refreshScreen(init);
+        const screen_size = try terminal.getWindowSize();
 
-        const keep_running = try editor.processKeypress();
+        try editor.refreshScreen(init, screen_size);
+
+        const keep_running = try editor.processKeypress(screen_size);
 
         if (!keep_running) break;
     }

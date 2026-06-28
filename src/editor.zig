@@ -220,10 +220,37 @@ fn drawWelcome(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), 
     try append_buffer.appendSlice(allocator, welcome[0..welcome_len]);
 }
 
-pub fn openTestRows(allocator: std.mem.Allocator) !void {
-    try appendRow(allocator, "First loaded row");
-    try appendRow(allocator, "Second loaded row");
-    try appendRow(allocator, "Third loaded row");
+pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []const u8) !void {
+    // for now read the. whole file into memory
+    // hardcoded limit for now ~ 1GB
+    const max_file_size = 1024 * 1024 * 1024;
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(max_file_size));
+    defer allocator.free(contents);
+
+    var start: usize = 0;
+
+    while (std.mem.indexOfScalarPos(u8, contents, start, '\n')) |end| {
+        var line = contents[start..end];
+
+        if (line.len > 0 and line[line.len - 1] == '\r') {
+            line = line[0 .. line.len - 1];
+        }
+
+        try appendRow(allocator, line);
+
+        start = end + 1;
+    }
+
+    if (start < contents.len) {
+        var line = contents[start..];
+
+        if (line.len > 0 and line[line.len - 1] == '\r') {
+            line = line[0 .. line.len - 1];
+        }
+
+        try appendRow(allocator, line);
+    }
 }
 
 fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {

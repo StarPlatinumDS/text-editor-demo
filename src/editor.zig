@@ -73,11 +73,12 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
             cursor_x = 0;
             cursor_y = 0;
             rowoff = 0;
+            coloff = 0;
         },
 
         .end => {
-            if (screen_size.cols > 0) {
-                cursor_x = screen_size.cols - 1;
+            if (cursor_y < rows.items.len) {
+                cursor_x = rows.items[cursor_y].chars.len;
             }
         },
 
@@ -106,11 +107,15 @@ fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
 
         // loop logic
         .arrow_right => {
-            if (cursor_x + 1 < screen_size.cols) {
-                cursor_x += 1;
-            } else if (cursor_y + 1 < screen_size.rows) {
-                cursor_y += 1;
-                cursor_x = 0;
+            if (cursor_y < rows.items.len) {
+                const row = rows.items[cursor_y];
+
+                if (cursor_x + 1 < row.chars.len) {
+                    cursor_x += 1;
+                } else if (cursor_y + 1 < rows.items.len) {
+                    cursor_y += 1;
+                    cursor_x = 0;
+                }
             }
         },
 
@@ -140,11 +145,6 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
 
     editorScroll(screen_size);
 
-    // keep cursor_x inside the screen
-    if (cursor_x >= screen_size.cols) {
-        cursor_x = screen_size.cols - 1;
-    }
-
     // instead of callin writeStreamingAll multiple ties
     // append all commands to call them once
     var append_buf: std.ArrayList(u8) = .empty;
@@ -160,7 +160,7 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
     try drawRows(init.gpa, &append_buf, screen_size);
 
     // move cursor to the editor cursor position
-    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, cursor_x + 1 });
+    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, cursor_x - coloff + 1 });
     defer init.gpa.free(cursor_position);
 
     // Move cursor to the editor cursor pos
@@ -180,9 +180,13 @@ fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), scr
         const filerow = y + rowoff;
         if (filerow < rows.items.len) {
             const row = rows.items[filerow];
-            const len = @min(row.chars.len, screen_size.cols);
 
-            try append_buffer.appendSlice(allocator, row.chars[0..len]);
+            if (coloff < row.chars.len) {
+                const visible = row.chars[coloff..];
+                const len = @min(visible.len, screen_size.cols);
+
+                try append_buffer.appendSlice(allocator, visible[0..len]);
+            }
         } else {
             // draw welcome message 1/3 down the screen
             if (rows.items.len == 0 and y == screen_size.rows / 3) {
@@ -276,5 +280,13 @@ fn editorScroll(screen_size: terminal.WindowSize) void {
 
     if (cursor_y >= rowoff + screen_size.rows) {
         rowoff = cursor_y - screen_size.rows + 1;
+    }
+
+    if (cursor_x < coloff) {
+        coloff = cursor_x;
+    }
+
+    if (cursor_x >= coloff + screen_size.rows) {
+        coloff = cursor_x - screen_size.rows + 1;
     }
 }

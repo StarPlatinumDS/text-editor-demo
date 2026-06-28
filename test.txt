@@ -1,3 +1,0 @@
-hello
-from
-kilo in zig

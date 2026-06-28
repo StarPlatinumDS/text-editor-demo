@@ -5,6 +5,10 @@ const terminal = @import("terminal.zig");
 var cursor_x: usize = 0;
 var cursor_y: usize = 0;
 
+// viewport offsets
+var rowoff: usize = 0;
+var coloff: usize = 0;
+
 const Row = struct {
     chars: []u8,
 
@@ -51,12 +55,20 @@ pub fn processKeypress() !bool {
 
         // up/down
         .page_up => {
-            cursor_y = 0;
+            const screen_size = try terminal.getWindowSize();
+            if (cursor_y > screen_size.rows) {
+                cursor_y -= screen_size.rows;
+            } else {
+                cursor_y = 0;
+            }
         },
 
         .page_down => {
             const screen_size = try terminal.getWindowSize();
-            cursor_y = screen_size.rows - 1;
+
+            if (rows.items.len > 0) {
+                cursor_y = @min(cursor_y + screen_size.rows, rows.items.len - 1);
+            }
         },
 
         // home/end
@@ -113,8 +125,11 @@ fn moveCursor(key: terminal.Key) !void {
 
         // need limit logic
         .arrow_down => {
-            if (cursor_y + 1 < screen_size.rows)
-                cursor_y += 1;
+            if (rows.items.len > 0) {
+                if (cursor_y + 1 < rows.items.len) {
+                    cursor_y += 1;
+                }
+            }
         },
 
         else => {},
@@ -128,14 +143,11 @@ pub fn refreshScreen(init: std.process.Init) !void {
     // get terminal size every refresh
     const screen_size = try terminal.getWindowSize();
 
+    editorScroll(screen_size);
+
     // keep cursor_x inside the screen
     if (cursor_x >= screen_size.cols) {
         cursor_x = screen_size.cols - 1;
-    }
-
-    // keep cursor_y inside the screen
-    if (cursor_y >= screen_size.rows) {
-        cursor_y = screen_size.rows - 1;
     }
 
     // instead of callin writeStreamingAll multiple ties
@@ -153,7 +165,7 @@ pub fn refreshScreen(init: std.process.Init) !void {
     try drawRows(init.gpa, &append_buf, screen_size);
 
     // move cursor to the editor cursor position
-    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y + 1, cursor_x + 1 });
+    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, cursor_x + 1 });
     defer init.gpa.free(cursor_position);
 
     // Move cursor to the editor cursor pos
@@ -170,8 +182,9 @@ pub fn refreshScreen(init: std.process.Init) !void {
 fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), screen_size: terminal.WindowSize) !void {
     var y: usize = 0;
     while (y < screen_size.rows) : (y += 1) {
-        if (y < rows.items.len) {
-            const row = rows.items[y];
+        const filerow = y + rowoff;
+        if (filerow < rows.items.len) {
+            const row = rows.items[filerow];
             const len = @min(row.chars.len, screen_size.cols);
 
             try append_buffer.appendSlice(allocator, row.chars[0..len]);
@@ -259,4 +272,14 @@ fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
     try rows.append(allocator, .{
         .chars = owned_chars,
     });
+}
+
+fn editorScroll(screen_size: terminal.WindowSize) void {
+    if (cursor_y < rowoff) {
+        rowoff = cursor_y;
+    }
+
+    if (cursor_y >= rowoff + screen_size.rows) {
+        rowoff = cursor_y - screen_size.rows + 1;
+    }
 }

@@ -15,6 +15,12 @@ const tab_stop: usize = 8;
 // filename state
 var filename: ?[]u8 = null;
 
+// number of unsaved changes
+var dirty: usize = 0;
+// how many ctrl+q presses on unsaved changes
+const quit_times_default: usize = 3;
+var quit_times: usize = quit_times_default;
+
 const status_message_clock: std.Io.Clock = .awake;
 const status_message_timeout_seconds = 5;
 
@@ -83,7 +89,20 @@ pub fn processKeypress(
         .char => |c| {
             switch (c) {
                 // fires on Ctrl + Q and quits, doesn't react on siple 'q' press
-                ctrlKey('q') => return false,
+                ctrlKey('q') => {
+                    if (dirty > 0 and quit_times > 0) {
+                        try setStatusMessage(
+                            init,
+                            init.gpa,
+                            "Warning! File has unsaved. Press Ctrl+Q {d} more time(s) to quit.",
+                            .{quit_times},
+                        );
+
+                        quit_times -= 1;
+                        return true;
+                    }
+                    return false;
+                },
                 ctrlKey('s') => {
                     try saveFile(init, init.gpa);
                 },
@@ -142,6 +161,7 @@ pub fn processKeypress(
         .escape => {},
     }
 
+    quit_times = quit_times_default;
     // means editor is runnign
     return true;
 }
@@ -352,6 +372,9 @@ pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []co
     }
 
     filename = owned_filename;
+
+    // opening doesn't count as a change
+    dirty = 0;
 }
 
 // ....
@@ -369,6 +392,9 @@ pub fn saveFile(init: std.process.Init, allocator: std.mem.Allocator) !void {
 
     var file_writer = file.writer(init.io, &.{});
     try file_writer.interface.writeAll(contents);
+
+    // reset the changed/unchanged flag
+    dirty = 0;
 
     try setStatusMessage(init, allocator, "{d} bytes written to disk", .{contents.len});
 }
@@ -458,6 +484,9 @@ fn editorInsertChar(allocator: std.mem.Allocator, c: u8) !void {
     row.chars = new_chars;
 
     try updateRow(allocator, row);
+
+    // mark changed/unchanged
+    dirty += 1;
 
     cursor_x = insert_at + 1;
 }
@@ -570,10 +599,16 @@ fn drawStatusBar(
     const name: []const u8 = if (filename) |f| f else "[No Name]";
     const short_name = name[0..@min(name.len, 20)];
 
+    var modified_marker: []const u8 = "";
+
+    if (dirty > 0) {
+        modified_marker = " (modified)";
+    }
+
     const status = try std.fmt.allocPrint(
         allocator,
-        "{s} - {d} lines",
-        .{ short_name, rows.items.len },
+        "{s} - {d} lines{s}",
+        .{ short_name, rows.items.len, modified_marker },
     );
     defer allocator.free(status);
 

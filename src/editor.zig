@@ -12,6 +12,9 @@ var coloff: usize = 0;
 // tabs
 const tab_stop: usize = 8;
 
+// filename state
+var filename: ?[]u8 = null;
+
 const Row = struct {
     // file text, will be editable later on
     chars: []u8,
@@ -38,6 +41,11 @@ pub fn deinit(allocator: std.mem.Allocator) void {
     }
 
     rows.deinit(allocator);
+
+    if (filename) |name| {
+        allocator.free(name);
+        filename = null;
+    }
 }
 
 // return an obscure ASCII representation of Ctrl + Q if 'q' is passed
@@ -48,6 +56,8 @@ fn ctrlKey(comptime c: u8) u8 {
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
 pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
+    const editor_size = editorAreaSize(screen_size);
+
     // read one character from input, it may be 'a' or 'ESC [ A'
     const key = try terminal.readKey();
 
@@ -64,12 +74,12 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
         .arrow_right,
         .arrow_up,
         .arrow_down,
-        => moveCursor(key, screen_size),
+        => moveCursor(key, editor_size),
 
         // up/down
         .page_up => {
-            if (cursor_y > screen_size.rows) {
-                cursor_y -= screen_size.rows;
+            if (cursor_y > editor_size.rows) {
+                cursor_y -= editor_size.rows;
             } else {
                 cursor_y = 0;
             }
@@ -77,7 +87,7 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
 
         .page_down => {
             if (rows.items.len > 0) {
-                cursor_y = @min(cursor_y + screen_size.rows, rows.items.len - 1);
+                cursor_y = @min(cursor_y + editor_size.rows, rows.items.len - 1);
             }
         },
 
@@ -156,6 +166,7 @@ fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
 pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !void {
     const stdout = std.Io.File.stdout();
 
+    const editor_size = editorAreaSize(screen_size);
     const render_x = editorScroll(screen_size);
 
     // instead of callin writeStreamingAll multiple ties
@@ -170,7 +181,11 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
     try append_buf.appendSlice(init.gpa, "\x1b[H");
 
     // draw all visible rows into append buffer
-    try drawRows(init.gpa, &append_buf, screen_size);
+    try drawRows(init.gpa, &append_buf, editor_size);
+
+    // status + message bar
+    try drawStatusBar(init.gpa, &append_buf, screen_size);
+    try drawMessageBar(init.gpa, &append_buf, screen_size);
 
     // move cursor to the editor cursor position
     const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, render_x - coloff + 1 });
@@ -215,9 +230,7 @@ fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), scr
 
         // this is needed so that terminal doesn't scroll
         // by one line after end
-        if (y + 1 < screen_size.rows) {
-            try append_buffer.appendSlice(allocator, "\r\n");
-        }
+        try append_buffer.appendSlice(allocator, "\r\n");
     }
 }
 
@@ -245,7 +258,24 @@ fn drawWelcome(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), 
     try append_buffer.appendSlice(allocator, welcome[0..welcome_len]);
 }
 
+// ....
+fn drawMessageBar(
+    allocator: std.mem.Allocator,
+    append_buffer: *std.ArrayList(u8),
+    screen_size: terminal.WindowSize,
+) !void {
+    try append_buffer.appendSlice(allocator, "\r\n");
+    try append_buffer.appendSlice(allocator, "\x1b[K");
+
+    const message = "HELP: Ctrl+Q = quit";
+
+    const leng = @min(message.len, screen_size.cols);
+    try append_buffer.appendSlice(allocator, message[0..leng]);
+}
+
 pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []const u8) !void {
+    const owned_filename = try allocator.dupe(u8, path);
+    errdefer allocator.free(owned_filename);
     // for now read the. whole file into memory
     // hardcoded limit for now ~ 1GB
     const max_file_size = 1024 * 1024 * 1024;
@@ -276,6 +306,12 @@ pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []co
 
         try appendRow(allocator, line);
     }
+
+    if (filename) |old_name| {
+        allocator.free(old_name);
+    }
+
+    filename = owned_filename;
 }
 
 // .....
@@ -372,4 +408,79 @@ fn rowCxToRx(row: Row, cx: usize) usize {
     }
 
     return rx;
+}
+
+// reserver for status bar
+fn editorAreaSize(screen_size: terminal.WindowSize) terminal.WindowSize {
+    // ned 2 rows for status bar and for messages
+    const reserved_rows: usize = if (screen_size.rows > 2) 2 else 0;
+
+    return .{
+        .rows = screen_size.rows - reserved_rows,
+        .cols = screen_size.cols,
+    };
+}
+
+// ....
+fn drawStatusBar(
+    allocator: std.mem.Allocator,
+    append_buffer: *std.ArrayList(u8),
+    screen_size: terminal.WindowSize,
+) !void {
+
+    // same as
+    // var name: []const u8 = undefined;
+    // if (filename) |stored_filename| {
+    //     name = stored_filename;
+    // } else {
+    //     name = "[No Name]";
+    // }
+    const name: []const u8 = if (filename) |f| f else "[No Name]";
+    const short_name = name[0..@min(name.len, 20)];
+
+    const status = try std.fmt.allocPrint(
+        allocator,
+        "{s} - {d} lines",
+        .{ short_name, rows.items.len },
+    );
+    defer allocator.free(status);
+
+    //same as
+    // var current_line: usize = 0;
+    // if (rows.items.len > 0) {
+    //     const one_based_cursor_y = cursor_y + 1;
+    //     current_line = @min(one_based_cursor_y, rows.items.len);
+    // }
+    const current_line: usize = if (rows.items.len == 0)
+        0
+    else
+        @min(cursor_y + 1, rows.items.len);
+
+    const right_status = try std.fmt.allocPrint(
+        allocator,
+        "{d}/{d}",
+        .{ current_line, rows.items.len },
+    );
+    defer allocator.free(right_status);
+
+    //invert colors
+    try append_buffer.appendSlice(allocator, "\x1b[7m");
+
+    var leng: usize = @min(status.len, screen_size.cols);
+    try append_buffer.appendSlice(allocator, status[0..leng]);
+
+    while (leng < screen_size.cols) {
+        const remaining = screen_size.cols - leng;
+
+        if (right_status.len <= remaining and remaining == right_status.len) {
+            try append_buffer.appendSlice(allocator, right_status);
+            leng += right_status.len;
+            break;
+        } else {
+            try append_buffer.append(allocator, ' ');
+            leng += 1;
+        }
+    }
+
+    try append_buffer.appendSlice(allocator, "\x1b[m");
 }

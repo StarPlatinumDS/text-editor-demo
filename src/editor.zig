@@ -15,6 +15,12 @@ const tab_stop: usize = 8;
 // filename state
 var filename: ?[]u8 = null;
 
+const status_message_clock: std.Io.Clock = .awake;
+const status_message_timeout_seconds = 5;
+
+var status_message: ?[]u8 = null;
+var status_message_time: ?std.Io.Timestamp = null;
+
 const Row = struct {
     // file text, will be editable later on
     chars: []u8,
@@ -33,8 +39,10 @@ const Row = struct {
     }
 };
 
+// ....
 var rows: std.ArrayList(Row) = .empty;
 
+// ....
 pub fn deinit(allocator: std.mem.Allocator) void {
     for (rows.items) |row| {
         row.deinit(allocator);
@@ -46,6 +54,13 @@ pub fn deinit(allocator: std.mem.Allocator) void {
         allocator.free(name);
         filename = null;
     }
+
+    if (status_message) |message| {
+        allocator.free(message);
+        status_message = null;
+    }
+
+    status_message_time = null;
 }
 
 // return an obscure ASCII representation of Ctrl + Q if 'q' is passed
@@ -74,7 +89,7 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
         .arrow_right,
         .arrow_up,
         .arrow_down,
-        => moveCursor(key, editor_size),
+        => moveCursor(key),
 
         // up/down
         .page_up => {
@@ -83,12 +98,16 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
             } else {
                 cursor_y = 0;
             }
+
+            snapCursorToRow();
         },
 
         .page_down => {
             if (rows.items.len > 0) {
                 cursor_y = @min(cursor_y + editor_size.rows, rows.items.len - 1);
             }
+
+            snapCursorToRow();
         },
 
         // home/end
@@ -116,7 +135,7 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
     return true;
 }
 
-fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
+fn moveCursor(key: terminal.Key) void {
     switch (key) {
         .arrow_left => {
             // prevent moving left after screen edge
@@ -124,7 +143,7 @@ fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
                 cursor_x -= 1;
             } else if (cursor_y > 0) {
                 cursor_y -= 1;
-                cursor_x = screen_size.cols - 1;
+                cursor_x = currentRowLen();
             }
         },
 
@@ -160,6 +179,8 @@ fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
 
         else => {},
     }
+
+    snapCursorToRow();
 }
 
 // ....
@@ -167,7 +188,7 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
     const stdout = std.Io.File.stdout();
 
     const editor_size = editorAreaSize(screen_size);
-    const render_x = editorScroll(screen_size);
+    const render_x = editorScroll(editor_size);
 
     // instead of callin writeStreamingAll multiple ties
     // append all commands to call them once
@@ -185,7 +206,8 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
 
     // status + message bar
     try drawStatusBar(init.gpa, &append_buf, screen_size);
-    try drawMessageBar(init.gpa, &append_buf, screen_size);
+    try append_buf.appendSlice(init.gpa, "\r\n");
+    try drawMessageBar(init, init.gpa, &append_buf, screen_size);
 
     // move cursor to the editor cursor position
     const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, render_x - coloff + 1 });
@@ -260,16 +282,20 @@ fn drawWelcome(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), 
 
 // ....
 fn drawMessageBar(
+    init: std.process.Init,
     allocator: std.mem.Allocator,
     append_buffer: *std.ArrayList(u8),
     screen_size: terminal.WindowSize,
 ) !void {
-    try append_buffer.appendSlice(allocator, "\r\n");
     try append_buffer.appendSlice(allocator, "\x1b[K");
 
-    const message = "HELP: Ctrl+Q = quit";
+    if (!statusMessageIsFresh(init)) {
+        return;
+    }
 
+    const message = status_message orelse return;
     const leng = @min(message.len, screen_size.cols);
+
     try append_buffer.appendSlice(allocator, message[0..leng]);
 }
 
@@ -306,6 +332,9 @@ pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []co
 
         try appendRow(allocator, line);
     }
+
+    // show filename
+    try setStatusMessage(init, allocator, "Opened {s}", .{path});
 
     if (filename) |old_name| {
         allocator.free(old_name);
@@ -483,4 +512,54 @@ fn drawStatusBar(
     }
 
     try append_buffer.appendSlice(allocator, "\x1b[m");
+}
+
+// ....
+fn nowStatusTime(init: std.process.Init) std.Io.Timestamp {
+    return std.Io.Clock.now(status_message_clock, init.io);
+}
+
+// ....
+pub fn setStatusMessage(
+    init: std.process.Init,
+    allocator: std.mem.Allocator,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    const new_message = try std.fmt.allocPrint(allocator, fmt, args);
+    errdefer allocator.free(new_message);
+
+    if (status_message) |old_message| {
+        allocator.free(old_message);
+    }
+
+    status_message = new_message;
+    status_message_time = nowStatusTime(init);
+}
+
+// ....
+fn statusMessageIsFresh(init: std.process.Init) bool {
+    if (status_message == null) {
+        return false;
+    }
+
+    const message_time = status_message_time orelse return true;
+    const now = nowStatusTime(init);
+
+    const age = message_time.durationTo(now);
+
+    return age.toSeconds() < status_message_timeout_seconds;
+}
+
+// ....
+fn currentRowLen() usize {
+    if (cursor_y < rows.items.len) {
+        return rows.items[cursor_y].chars.len;
+    }
+
+    return 0;
+}
+
+fn snapCursorToRow() void {
+    cursor_x = @min(cursor_x, currentRowLen());
 }

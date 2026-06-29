@@ -11,6 +11,8 @@ pub fn main(init: std.process.Init) !void {
 
     defer editor.deinit(init.gpa);
 
+    try editor.setStatusMessage(init, init.gpa, "HELP: Ctrl + Q = quit", .{});
+
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len >= 2) {

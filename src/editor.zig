@@ -87,7 +87,12 @@ pub fn processKeypress(
                 ctrlKey('s') => {
                     try saveFile(init, init.gpa);
                 },
-                else => {},
+                else => {
+                    // rn insert only printable chars
+                    if (!std.ascii.isControl(c)) {
+                        try editorInsertChar(init.gpa, c);
+                    }
+                },
             }
         },
 
@@ -158,7 +163,7 @@ fn moveCursor(key: terminal.Key) void {
             if (cursor_y < rows.items.len) {
                 const row = rows.items[cursor_y];
 
-                if (cursor_x + 1 < row.chars.len) {
+                if (cursor_x < row.chars.len) {
                     cursor_x += 1;
                 } else if (cursor_y + 1 < rows.items.len) {
                     cursor_y += 1;
@@ -411,6 +416,50 @@ fn editorRowsToString(allocator: std.mem.Allocator) ![]u8 {
     }
 
     return buffer;
+}
+
+// ....
+fn editorInsertChar(allocator: std.mem.Allocator, c: u8) !void {
+    // creates row if ther's none
+    if (cursor_y == rows.items.len) {
+        try appendRow(allocator, "");
+    }
+
+    // safety guard, cursor_y should point at valid row
+    if (cursor_y >= rows.items.len) {
+        return;
+    }
+
+    var row = &rows.items[cursor_y];
+
+    const insert_at = @min(cursor_x, row.chars.len);
+
+    const new_chars = try allocator.alloc(u8, row.chars.len + 1);
+    errdefer allocator.free(new_chars);
+
+    if (insert_at > 0) {
+        @memcpy(new_chars[0..insert_at], row.chars[0..insert_at]);
+    }
+
+    new_chars[insert_at] = c;
+
+    if (insert_at < row.chars.len) {
+        @memcpy(
+            new_chars[insert_at + 1 ..],
+            row.chars[insert_at..],
+        );
+    }
+
+    // replace the old row text
+    if (row.chars.len > 0) {
+        allocator.free(row.chars);
+    }
+
+    row.chars = new_chars;
+
+    try updateRow(allocator, row);
+
+    cursor_x = insert_at + 1;
 }
 
 // ....

@@ -1,4 +1,0 @@
-Since editing does not exist yet, this mostly rewrites the same contents. 
-But it proves the save path works.
-
-Next after this: add a dirty flag, then start inserting characters into rows.

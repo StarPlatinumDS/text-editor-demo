@@ -70,7 +70,10 @@ fn ctrlKey(comptime c: u8) u8 {
 
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
-pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
+pub fn processKeypress(
+    init: std.process.Init,
+    screen_size: terminal.WindowSize,
+) !bool {
     const editor_size = editorAreaSize(screen_size);
 
     // read one character from input, it may be 'a' or 'ESC [ A'
@@ -81,6 +84,9 @@ pub fn processKeypress(screen_size: terminal.WindowSize) !bool {
             switch (c) {
                 // fires on Ctrl + Q and quits, doesn't react on siple 'q' press
                 ctrlKey('q') => return false,
+                ctrlKey('s') => {
+                    try saveFile(init, init.gpa);
+                },
                 else => {},
             }
         },
@@ -343,6 +349,25 @@ pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []co
     filename = owned_filename;
 }
 
+// ....
+pub fn saveFile(init: std.process.Init, allocator: std.mem.Allocator) !void {
+    if (filename == null) {
+        try setStatusMessage(init, allocator, "Save failed: no filename", .{});
+        return;
+    }
+
+    const contents = try editorRowsToString(allocator);
+    defer allocator.free(contents);
+
+    const file = try std.Io.Dir.cwd().createFile(init.io, filename.?, .{});
+    defer file.close(init.io);
+
+    var file_writer = file.writer(init.io, &.{});
+    try file_writer.interface.writeAll(contents);
+
+    try setStatusMessage(init, allocator, "{d} bytes written to disk", .{contents.len});
+}
+
 // .....
 fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
     var row = Row{
@@ -357,6 +382,35 @@ fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
     try updateRow(allocator, &row);
 
     try rows.append(allocator, row);
+}
+
+// ....
+fn editorRowsToString(allocator: std.mem.Allocator) ![]u8 {
+    // reconstruct file contents from in-memory rows
+    var total_len: usize = 0;
+
+    for (rows.items) |row| {
+        total_len += row.chars.len + 1;
+    }
+
+    // allocate buffer that'll contain the whole file
+    const buffer = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(buffer);
+
+    // copy each row to output followed by '\n'
+    var index: usize = 0;
+
+    for (rows.items) |row| {
+        if (row.chars.len > 0) {
+            @memcpy(buffer[index .. index + row.chars.len], row.chars);
+            index += row.chars.len;
+        }
+
+        buffer[index] = '\n';
+        index += 1;
+    }
+
+    return buffer;
 }
 
 // ....

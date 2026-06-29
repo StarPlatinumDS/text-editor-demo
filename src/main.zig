@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
 
         try editor.refreshScreen(init, screen_size);
 
-        const keep_running = try editor.processKeypress(screen_size);
+        const keep_running = try editor.processKeypress(init, screen_size);
 
         if (!keep_running) break;
     }

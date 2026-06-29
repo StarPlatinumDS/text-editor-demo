@@ -9,11 +9,24 @@ var cursor_y: usize = 0;
 var rowoff: usize = 0;
 var coloff: usize = 0;
 
+// tabs
+const tab_stop: usize = 8;
+
 const Row = struct {
+    // file text, will be editable later on
     chars: []u8,
 
+    // text as it should appear on screen, expand tabs into spaces
+    render: []u8,
+
     fn deinit(self: Row, allocator: std.mem.Allocator) void {
-        allocator.free(self.chars);
+        if (self.chars.len > 0) {
+            allocator.free(self.chars);
+        }
+
+        if (self.render.len > 0) {
+            allocator.free(self.render);
+        }
     }
 };
 
@@ -143,7 +156,7 @@ fn moveCursor(key: terminal.Key, screen_size: terminal.WindowSize) void {
 pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !void {
     const stdout = std.Io.File.stdout();
 
-    editorScroll(screen_size);
+    const render_x = editorScroll(screen_size);
 
     // instead of callin writeStreamingAll multiple ties
     // append all commands to call them once
@@ -160,7 +173,7 @@ pub fn refreshScreen(init: std.process.Init, screen_size: terminal.WindowSize) !
     try drawRows(init.gpa, &append_buf, screen_size);
 
     // move cursor to the editor cursor position
-    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, cursor_x - coloff + 1 });
+    const cursor_position = try std.fmt.allocPrint(init.gpa, "\x1b[{d};{d}H", .{ cursor_y - rowoff + 1, render_x - coloff + 1 });
     defer init.gpa.free(cursor_position);
 
     // Move cursor to the editor cursor pos
@@ -181,8 +194,8 @@ fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), scr
         if (filerow < rows.items.len) {
             const row = rows.items[filerow];
 
-            if (coloff < row.chars.len) {
-                const visible = row.chars[coloff..];
+            if (coloff < row.render.len) {
+                const visible = row.render[coloff..];
                 const len = @min(visible.len, screen_size.cols);
 
                 try append_buffer.appendSlice(allocator, visible[0..len]);
@@ -265,15 +278,64 @@ pub fn openFile(init: std.process.Init, allocator: std.mem.Allocator, path: []co
     }
 }
 
+// .....
 fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
-    const owned_chars = try allocator.dupe(u8, line);
+    var row = Row{
+        .chars = try allocator.dupe(u8, line),
 
-    try rows.append(allocator, .{
-        .chars = owned_chars,
-    });
+        //placeholder for now
+        .render = @constCast(&[_]u8{}),
+    };
+
+    errdefer row.deinit(allocator);
+
+    try updateRow(allocator, &row);
+
+    try rows.append(allocator, row);
 }
 
-fn editorScroll(screen_size: terminal.WindowSize) void {
+// ....
+fn updateRow(allocator: std.mem.Allocator, row: *Row) !void {
+    // builds the rendered version of the row
+    var render_buf: std.ArrayList(u8) = .empty;
+    defer render_buf.deinit(allocator);
+
+    var render_col: usize = 0;
+
+    for (row.chars) |c| {
+        if (c == '\t') {
+            // try to add at least one space
+            try render_buf.append(allocator, ' ');
+            render_col += 1;
+
+            // keep adding until render meets tab stop
+            while (render_col % tab_stop != 0) {
+                try render_buf.append(allocator, ' ');
+                render_col += 1;
+            }
+        } else {
+            try render_buf.append(allocator, c);
+            render_col += 1;
+        }
+    }
+
+    const new_render = try allocator.dupe(u8, render_buf.items);
+
+    if (row.render.len > 0) {
+        allocator.free(row.render);
+    }
+
+    row.render = new_render;
+}
+
+// ....
+fn editorScroll(screen_size: terminal.WindowSize) usize {
+    var render_x = cursor_x;
+
+    if (cursor_y < rows.items.len) {
+        render_x = rowCxToRx(rows.items[cursor_y], cursor_x);
+    }
+
     if (cursor_y < rowoff) {
         rowoff = cursor_y;
     }
@@ -282,11 +344,32 @@ fn editorScroll(screen_size: terminal.WindowSize) void {
         rowoff = cursor_y - screen_size.rows + 1;
     }
 
-    if (cursor_x < coloff) {
-        coloff = cursor_x;
+    if (render_x < coloff) {
+        coloff = render_x;
     }
 
-    if (cursor_x >= coloff + screen_size.rows) {
-        coloff = cursor_x - screen_size.rows + 1;
+    if (render_x >= coloff + screen_size.cols) {
+        coloff = render_x - screen_size.cols + 1;
     }
+
+    return render_x;
+}
+
+// helper for conversion of cursor_x to render
+fn rowCxToRx(row: Row, cx: usize) usize {
+    var rx: usize = 0;
+
+    const limit = @min(cx, row.chars.len);
+
+    var i: usize = 0;
+    while (i < limit) : (i += 1) {
+        if (row.chars[i] == '\t') {
+            //move rx forward to before tab stop - 1
+            rx += (tab_stop - 1) - (rx % tab_stop);
+        }
+
+        rx += 1;
+    }
+
+    return rx;
 }

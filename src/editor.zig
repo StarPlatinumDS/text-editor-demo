@@ -70,7 +70,7 @@ pub fn deinit(allocator: std.mem.Allocator) void {
 }
 
 // return an obscure ASCII representation of Ctrl + Q if 'q' is passed
-fn ctrlKey(comptime c: u8) u8 {
+pub fn ctrlKey(comptime c: u8) u8 {
     return c & 0x1f;
 }
 
@@ -154,8 +154,16 @@ pub fn processKeypress(
             }
         },
 
+        // backspace
+        .backspace => {
+            try editorDeleteChar(init.gpa);
+        },
+
         //delete
-        .delete => {},
+        .delete => {
+            moveCursor(.arrow_right);
+            try editorDeleteChar(init.gpa);
+        },
 
         // ignore regular esc for now
         .escape => {},
@@ -698,6 +706,109 @@ fn currentRowLen() usize {
     return 0;
 }
 
+// ....
 fn snapCursorToRow() void {
     cursor_x = @min(cursor_x, currentRowLen());
+}
+
+fn rowDelChar(
+    allocator: std.mem.Allocator,
+    row: *Row,
+    at: usize,
+) !void {
+    if (at >= row.chars.len) {
+        return;
+    }
+
+    const new_len = row.chars.len - 1;
+    var new_chars: []u8 = @constCast(&[_]u8{});
+
+    if (new_len > 0) {
+        new_chars = try allocator.alloc(u8, new_len);
+        errdefer allocator.free(new_chars);
+
+        if (at > 0) {
+            @memcpy(new_chars[0..at], row.chars[0..at]);
+        }
+
+        if (at + 1 < row.chars.len) {
+            @memcpy(new_chars[at..], row.chars[at + 1 ..]);
+        }
+    }
+
+    if (row.chars.len > 0) {
+        allocator.free(row.chars);
+    }
+
+    row.chars = new_chars;
+
+    try updateRow(allocator, row);
+}
+
+fn rowAppendString(
+    allocator: std.mem.Allocator,
+    row: *Row,
+    text: []const u8,
+) !void {
+    if (text.len == 0) {
+        return;
+    }
+
+    const old_len = row.chars.len;
+    const new_chars = try allocator.alloc(u8, old_len + text.len);
+    errdefer allocator.free(new_chars);
+
+    if (old_len > 0) {
+        @memcpy(new_chars[0..old_len], row.chars);
+    }
+
+    @memcpy(new_chars[old_len..], text);
+
+    if (row.chars.len > 0) {
+        allocator.free(row.chars);
+    }
+
+    row.chars = new_chars;
+
+    try updateRow(allocator, row);
+}
+
+// ....
+fn editorDeleteChar(allocator: std.mem.Allocator) !void {
+    // if nothing  to del
+    if (cursor_y >= rows.items.len) {
+        return;
+    }
+
+    if (cursor_x == 0 and cursor_y == 0) {
+        return;
+    }
+
+    if (cursor_x > 0) {
+        //del the char before the cursor
+        const row = &rows.items[cursor_y];
+
+        try rowDelChar(allocator, row, cursor_x - 1);
+
+        cursor_x -= 1;
+    } else {
+        // at the beggining of a row, backspace joins it to prev
+        const previous_row_len = rows.items[cursor_y - 1].chars.len;
+
+        const current_row = rows.items[cursor_y];
+
+        try rowAppendString(
+            allocator,
+            &rows.items[cursor_y - 1],
+            current_row.chars,
+        );
+
+        const removed_row = rows.orderedRemove(cursor_y);
+        removed_row.deinit(allocator);
+
+        cursor_y -= 1;
+        cursor_x = previous_row_len;
+    }
+
+    dirty += 1;
 }

@@ -30,6 +30,7 @@ pub const Key = union(enum) {
     home,
     end,
     delete,
+    backspace,
 };
 
 // WindowSize is a wrapper around terminal's window size
@@ -190,7 +191,15 @@ pub fn readKey() !Key {
             return .escape;
         }
 
+        if (c == 127 or c == ctrlKeyByte('h')) {
+            return .backspace;
+        }
+
         // return for a regular char
         return .{ .char = c };
     }
+}
+
+fn ctrlKeyByte(comptime c: u8) u8 {
+    return c & 0x1f;
 }

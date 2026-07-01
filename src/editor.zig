@@ -74,6 +74,12 @@ pub fn ctrlKey(comptime c: u8) u8 {
     return c & 0x1f;
 }
 
+// callback for search
+const PromptCallback = *const fn (
+    query: []const u8,
+    key: terminal.Key,
+) anyerror!void;
+
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
 pub fn processKeypress(
@@ -883,6 +889,7 @@ fn editorPrompt(
     init: std.process.Init,
     allocator: std.mem.Allocator,
     prompt: []const u8,
+    callback: ?PromptCallback,
 ) !?[]u8 {
     var buffer: std.ArrayList(u8) = .empty;
     errdefer buffer.deinit(allocator);
@@ -907,6 +914,9 @@ fn editorPrompt(
                         if (buffer.items.len == 0) {
                             continue;
                         }
+                        if (callback) |cb| {
+                            try cb(buffer.items, key);
+                        }
 
                         try setStatusMessage(init, allocator, "", .{});
 
@@ -914,6 +924,10 @@ fn editorPrompt(
                     },
 
                     27 => {
+                        if (callback) |cb| {
+                            try cb(buffer.items, key);
+                        }
+
                         try setStatusMessage(init, allocator, "", .{});
                         buffer.deinit(allocator);
                         return null;
@@ -934,12 +948,57 @@ fn editorPrompt(
             },
 
             .escape => {
+                if (callback) |cb| {
+                    try cb(buffer.items, key);
+                }
+
                 try setStatusMessage(init, allocator, "", .{});
                 buffer.deinit(allocator);
                 return null;
             },
 
             else => {},
+        }
+
+        if (callback) |cb| {
+            try cb(buffer.items, key);
+        }
+    }
+}
+
+// ....
+fn editorFindCallback(
+    query: []const u8,
+    key: terminal.Key,
+) !void {
+    if (query.len == 0) {
+        return;
+    }
+
+    switch (key) {
+        .char => |c| {
+            if (c == '\r') {
+                return;
+            }
+        },
+
+        .escape => return,
+
+        else => {},
+    }
+
+    var i: usize = 0;
+    while (i < rows.items.len) : (i += 1) {
+        const row = rows.items[i];
+
+        if (std.mem.indexOf(u8, row.render, query)) |match_index| {
+            cursor_y = i;
+            cursor_x = rowRxToCx(row, match_index);
+
+            rowoff = rows.items.len;
+            coloff = 0;
+
+            break;
         }
     }
 }
@@ -949,26 +1008,15 @@ fn editorFind(
     init: std.process.Init,
     allocator: std.mem.Allocator,
 ) !void {
-    const query = try editorPrompt(init, allocator, "Search");
-    if (query == null) {
-        return;
-    }
-    defer allocator.free(query.?);
+    const query = try editorPrompt(
+        init,
+        allocator,
+        "Search",
+        editorFindCallback,
+    );
 
-    var i: usize = 0;
-    while (i < rows.items.len) : (i += 1) {
-        const row = rows.items[i];
-
-        if (std.mem.indexOf(u8, row.render, query.?)) |match_index| {
-            cursor_y = i;
-
-            cursor_x = rowRxToCx(row, match_index);
-
-            rowoff = rows.items.len;
-            coloff = 0;
-
-            return;
-        }
+    if (query) |owned_query| {
+        allocator.free(owned_query);
     }
 }
 

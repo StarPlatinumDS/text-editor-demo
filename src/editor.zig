@@ -106,6 +106,9 @@ pub fn processKeypress(
                 ctrlKey('s') => {
                     try saveFile(init, init.gpa);
                 },
+                ctrlKey('f') => {
+                    try editorFind(init, init.gpa);
+                },
                 '\r' => {
                     try editorInsertNewline(init.gpa);
                 },
@@ -873,4 +876,98 @@ fn editorInsertNewline(allocator: std.mem.Allocator) !void {
     cursor_y += 1;
     cursor_x = 0;
     dirty += 1;
+}
+
+// ....
+fn editorPrompt(
+    init: std.process.Init,
+    allocator: std.mem.Allocator,
+    prompt: []const u8,
+) !?[]u8 {
+    var buffer: std.ArrayList(u8) = .empty;
+    errdefer buffer.deinit(allocator);
+
+    while (true) {
+        try setStatusMessage(
+            init,
+            allocator,
+            "{s} : {s}",
+            .{ prompt, buffer.items },
+        );
+
+        const screen_size = try terminal.getWindowSize();
+        try refreshScreen(init, screen_size);
+
+        const key = try terminal.readKey();
+
+        switch (key) {
+            .char => |c| {
+                switch (c) {
+                    '\r' => {
+                        if (buffer.items.len == 0) {
+                            continue;
+                        }
+
+                        try setStatusMessage(init, allocator, "", .{});
+
+                        return try buffer.toOwnedSlice(allocator);
+                    },
+
+                    27 => {
+                        try setStatusMessage(init, allocator, "", .{});
+                        buffer.deinit(allocator);
+                        return null;
+                    },
+
+                    else => {
+                        if (!std.ascii.isControl(c)) {
+                            try buffer.append(allocator, c);
+                        }
+                    },
+                }
+            },
+
+            .backspace => {
+                if (buffer.items.len > 0) {
+                    _ = buffer.pop();
+                }
+            },
+
+            .escape => {
+                try setStatusMessage(init, allocator, "", .{});
+                buffer.deinit(allocator);
+                return null;
+            },
+
+            else => {},
+        }
+    }
+}
+
+// ....
+fn editorFind(
+    init: std.process.Init,
+    allocator: std.mem.Allocator,
+) !void {
+    const query = try editorPrompt(init, allocator, "Search");
+    if (query == null) {
+        return;
+    }
+    defer allocator.free(query.?);
+
+    var i: usize = 0;
+    while (i < rows.items.len) : (i += 1) {
+        const row = rows.items[i];
+
+        if (std.mem.indexOf(u8, row.render, query.?)) |match_index| {
+            cursor_y = i;
+
+            cursor_x = match_index;
+
+            rowoff = rows.items.len;
+            coloff = 0;
+
+            return;
+        }
+    }
 }

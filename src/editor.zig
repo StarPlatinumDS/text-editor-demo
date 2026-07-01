@@ -80,6 +80,15 @@ const PromptCallback = *const fn (
     key: terminal.Key,
 ) anyerror!void;
 
+// when searching and there are multiple choices
+const SearchDirection = enum {
+    forward,
+    backward,
+};
+
+var search_last_match: ?usize = null;
+var search_direction: SearchDirection = .forward;
+
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
 pub fn processKeypress(
@@ -923,16 +932,6 @@ fn editorPrompt(
                         return try buffer.toOwnedSlice(allocator);
                     },
 
-                    27 => {
-                        if (callback) |cb| {
-                            try cb(buffer.items, key);
-                        }
-
-                        try setStatusMessage(init, allocator, "", .{});
-                        buffer.deinit(allocator);
-                        return null;
-                    },
-
                     else => {
                         if (!std.ascii.isControl(c)) {
                             try buffer.append(allocator, c);
@@ -972,27 +971,94 @@ fn editorFindCallback(
     key: terminal.Key,
 ) !void {
     if (query.len == 0) {
+        search_last_match = null;
+        search_direction = .forward;
         return;
     }
 
     switch (key) {
         .char => |c| {
             if (c == '\r') {
+                search_last_match = null;
+                search_direction = .forward;
                 return;
             }
+
+            search_last_match = null;
+            search_direction = .forward;
         },
 
-        .escape => return,
+        .escape => {
+            search_last_match = null;
+            search_direction = .forward;
+            return;
+        },
 
-        else => {},
+        .arrow_right,
+        .arrow_down,
+        => {
+            search_direction = .forward;
+        },
+
+        .arrow_left,
+        .arrow_up,
+        => {
+            search_direction = .backward;
+        },
+
+        .backspace => {
+            search_last_match = null;
+            search_direction = .forward;
+        },
+
+        else => {
+            search_last_match = null;
+            search_direction = .forward;
+        },
     }
 
-    var i: usize = 0;
-    while (i < rows.items.len) : (i += 1) {
-        const row = rows.items[i];
+    if (rows.items.len == 0) {
+        return;
+    }
+
+    var current: usize = undefined;
+
+    if (search_last_match) |last_match| {
+        current = last_match;
+    } else {
+        current = switch (search_direction) {
+            .forward => rows.items.len - 1,
+            .backward => 0,
+        };
+    }
+
+    var searched: usize = 0;
+
+    while (searched < rows.items.len) : (searched += 1) {
+        switch (search_direction) {
+            .forward => {
+                if (current + 1 >= rows.items.len) {
+                    current = 0;
+                } else {
+                    current += 1;
+                }
+            },
+
+            .backward => {
+                if (current == 0) {
+                    current = rows.items.len - 1;
+                } else {
+                    current -= 1;
+                }
+            },
+        }
+
+        const row = rows.items[current];
 
         if (std.mem.indexOf(u8, row.render, query)) |match_index| {
-            cursor_y = i;
+            search_last_match = current;
+
+            cursor_y = current;
             cursor_x = rowRxToCx(row, match_index);
 
             rowoff = rows.items.len;
@@ -1008,16 +1074,32 @@ fn editorFind(
     init: std.process.Init,
     allocator: std.mem.Allocator,
 ) !void {
+    const saved_cursor_x = cursor_x;
+    const saved_cursor_y = cursor_y;
+    const saved_rowoff = rowoff;
+    const saved_coloff = coloff;
+
+    search_last_match = null;
+    search_direction = .forward;
+
     const query = try editorPrompt(
         init,
         allocator,
-        "Search",
+        "Search, use ESC/Arrows/Enter",
         editorFindCallback,
     );
 
     if (query) |owned_query| {
         allocator.free(owned_query);
+    } else {
+        cursor_x = saved_cursor_x;
+        cursor_y = saved_cursor_y;
+        rowoff = saved_rowoff;
+        coloff = saved_coloff;
     }
+
+    search_last_match = null;
+    search_direction = .forward;
 }
 
 // ....

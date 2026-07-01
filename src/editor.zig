@@ -962,7 +962,7 @@ fn editorFind(
         if (std.mem.indexOf(u8, row.render, query.?)) |match_index| {
             cursor_y = i;
 
-            cursor_x = match_index;
+            cursor_x = rowRxToCx(row, match_index);
 
             rowoff = rows.items.len;
             coloff = 0;
@@ -970,4 +970,24 @@ fn editorFind(
             return;
         }
     }
+}
+
+// ....
+fn rowRxToCx(row: Row, rx: usize) usize {
+    var current_rx: usize = 0;
+    var cx: usize = 0;
+
+    while (cx < row.chars.len) : (cx += 1) {
+        if (row.chars[cx] == '\t') {
+            current_rx += (tab_stop - 1) - (current_rx % tab_stop);
+        }
+
+        current_rx += 1;
+
+        if (current_rx > rx) {
+            return cx;
+        }
+    }
+
+    return cx;
 }

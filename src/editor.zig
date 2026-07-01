@@ -106,6 +106,9 @@ pub fn processKeypress(
                 ctrlKey('s') => {
                     try saveFile(init, init.gpa);
                 },
+                '\r' => {
+                    try editorInsertNewline(init.gpa);
+                },
                 else => {
                     // rn insert only printable chars
                     if (!std.ascii.isControl(c)) {
@@ -409,18 +412,27 @@ pub fn saveFile(init: std.process.Init, allocator: std.mem.Allocator) !void {
 
 // .....
 fn appendRow(allocator: std.mem.Allocator, line: []const u8) !void {
+    try insertRow(allocator, rows.items.len, line);
+}
+
+fn insertRow(
+    allocator: std.mem.Allocator,
+    at: usize,
+    line: []const u8,
+) !void {
+    if (at > rows.items.len) {
+        return;
+    }
+
     var row = Row{
         .chars = try allocator.dupe(u8, line),
-
-        //placeholder for now
         .render = @constCast(&[_]u8{}),
     };
-
     errdefer row.deinit(allocator);
 
     try updateRow(allocator, &row);
 
-    try rows.append(allocator, row);
+    try rows.insert(allocator, at, row);
 }
 
 // ....
@@ -464,7 +476,7 @@ fn editorInsertChar(allocator: std.mem.Allocator, c: u8) !void {
         return;
     }
 
-    var row = &rows.items[cursor_y];
+    const row = &rows.items[cursor_y];
 
     const insert_at = @min(cursor_x, row.chars.len);
 
@@ -810,5 +822,55 @@ fn editorDeleteChar(allocator: std.mem.Allocator) !void {
         cursor_x = previous_row_len;
     }
 
+    dirty += 1;
+}
+
+// ....
+fn editorInsertNewline(allocator: std.mem.Allocator) !void {
+    if (cursor_y >= rows.items.len) {
+        try appendRow(allocator, "");
+
+        cursor_y = rows.items.len - 1;
+        cursor_x = 0;
+        dirty += 1;
+
+        return;
+    }
+
+    if (cursor_x == 0) {
+        try insertRow(allocator, cursor_y, "");
+    } else {
+        const old_chars = rows.items[cursor_y].chars;
+
+        const split_at = @min(cursor_x, old_chars.len);
+
+        const left = old_chars[0..split_at];
+        const right = old_chars[split_at..];
+
+        var left_row = Row{
+            .chars = try allocator.dupe(u8, left),
+            .render = @constCast(&[_]u8{}),
+        };
+        errdefer left_row.deinit(allocator);
+
+        try updateRow(allocator, &left_row);
+
+        var right_row = Row{
+            .chars = try allocator.dupe(u8, right),
+            .render = @constCast(&[_]u8{}),
+        };
+        errdefer right_row.deinit(allocator);
+
+        try updateRow(allocator, &right_row);
+
+        try rows.insert(allocator, cursor_y + 1, right_row);
+
+        const row = &rows.items[cursor_y];
+        row.deinit(allocator);
+        row.* = left_row;
+    }
+
+    cursor_y += 1;
+    cursor_x = 0;
     dirty += 1;
 }

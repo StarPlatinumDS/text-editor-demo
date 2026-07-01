@@ -34,6 +34,9 @@ const Row = struct {
     // text as it should appear on screen, expand tabs into spaces
     render: []u8,
 
+    // highlight selected text
+    highlight: []Highlight,
+
     fn deinit(self: Row, allocator: std.mem.Allocator) void {
         if (self.chars.len > 0) {
             allocator.free(self.chars);
@@ -41,6 +44,10 @@ const Row = struct {
 
         if (self.render.len > 0) {
             allocator.free(self.render);
+        }
+
+        if (self.highlight.len > 0) {
+            allocator.free(self.highlight);
         }
     }
 };
@@ -74,8 +81,15 @@ pub fn ctrlKey(comptime c: u8) u8 {
     return c & 0x1f;
 }
 
+const Highlight = enum(u8) {
+    normal,
+    number,
+    match,
+};
+
 // callback for search
 const PromptCallback = *const fn (
+    allocator: std.mem.Allocator,
     query: []const u8,
     key: terminal.Key,
 ) anyerror!void;
@@ -88,6 +102,9 @@ const SearchDirection = enum {
 
 var search_last_match: ?usize = null;
 var search_direction: SearchDirection = .forward;
+
+var search_saved_highlight_line: ?usize = null;
+var search_saved_highlight: ?[]Highlight = null;
 
 // processKeypress reads a key press and switches
 // depending on it, returns false on quit
@@ -293,9 +310,43 @@ fn drawRows(allocator: std.mem.Allocator, append_buffer: *std.ArrayList(u8), scr
 
             if (coloff < row.render.len) {
                 const visible = row.render[coloff..];
+                const visible_highlight = row.highlight[coloff..];
+
                 const len = @min(visible.len, screen_size.cols);
 
-                try append_buffer.appendSlice(allocator, visible[0..len]);
+                var current_color: ?u8 = null;
+
+                var j: usize = 0;
+                while (j < len) : (j += 1) {
+                    const highlight = visible_highlight[j];
+
+                    if (highlight == .normal) {
+                        if (current_color != 39) {
+                            try append_buffer.appendSlice(allocator, "\x1b[39m");
+                            current_color = 39;
+                        }
+
+                        try append_buffer.append(allocator, visible[j]);
+                    } else {
+                        const color = syntaxToColor(highlight);
+
+                        if (current_color != color) {
+                            const color_sequence = try std.fmt.allocPrint(
+                                allocator,
+                                "\x1b[{d}m",
+                                .{color},
+                            );
+                            defer allocator.free(color_sequence);
+
+                            try append_buffer.appendSlice(allocator, color_sequence);
+                            current_color = color;
+                        }
+
+                        try append_buffer.append(allocator, visible[j]);
+                    }
+                }
+
+                try append_buffer.appendSlice(allocator, "\x1b[39m");
             }
         } else {
             // draw welcome message 1/3 down the screen
@@ -445,6 +496,7 @@ fn insertRow(
     var row = Row{
         .chars = try allocator.dupe(u8, line),
         .render = @constCast(&[_]u8{}),
+        .highlight = @constCast(&[_]Highlight{}),
     };
     errdefer row.deinit(allocator);
 
@@ -561,6 +613,8 @@ fn updateRow(allocator: std.mem.Allocator, row: *Row) !void {
     }
 
     row.render = new_render;
+
+    try updateSyntax(allocator, row);
 }
 
 // ....
@@ -868,6 +922,7 @@ fn editorInsertNewline(allocator: std.mem.Allocator) !void {
         var left_row = Row{
             .chars = try allocator.dupe(u8, left),
             .render = @constCast(&[_]u8{}),
+            .highlight = @constCast(&[_]Highlight{}),
         };
         errdefer left_row.deinit(allocator);
 
@@ -876,6 +931,7 @@ fn editorInsertNewline(allocator: std.mem.Allocator) !void {
         var right_row = Row{
             .chars = try allocator.dupe(u8, right),
             .render = @constCast(&[_]u8{}),
+            .highlight = @constCast(&[_]Highlight{}),
         };
         errdefer right_row.deinit(allocator);
 
@@ -924,7 +980,7 @@ fn editorPrompt(
                             continue;
                         }
                         if (callback) |cb| {
-                            try cb(buffer.items, key);
+                            try cb(allocator, buffer.items, key);
                         }
 
                         try setStatusMessage(init, allocator, "", .{});
@@ -948,7 +1004,7 @@ fn editorPrompt(
 
             .escape => {
                 if (callback) |cb| {
-                    try cb(buffer.items, key);
+                    try cb(allocator, buffer.items, key);
                 }
 
                 try setStatusMessage(init, allocator, "", .{});
@@ -960,16 +1016,19 @@ fn editorPrompt(
         }
 
         if (callback) |cb| {
-            try cb(buffer.items, key);
+            try cb(allocator, buffer.items, key);
         }
     }
 }
 
 // ....
 fn editorFindCallback(
+    allocator: std.mem.Allocator,
     query: []const u8,
     key: terminal.Key,
 ) !void {
+    restoreSearchHighlight(allocator);
+
     if (query.len == 0) {
         search_last_match = null;
         search_direction = .forward;
@@ -1053,20 +1112,46 @@ fn editorFindCallback(
             },
         }
 
-        const row = rows.items[current];
+        const row = &rows.items[current];
 
         if (std.mem.indexOf(u8, row.render, query)) |match_index| {
             search_last_match = current;
 
             cursor_y = current;
-            cursor_x = rowRxToCx(row, match_index);
+            cursor_x = rowRxToCx(row.*, match_index);
 
             rowoff = rows.items.len;
             coloff = 0;
 
+            search_saved_highlight_line = current;
+            search_saved_highlight = try allocator.dupe(Highlight, row.highlight);
+
+            @memset(
+                row.highlight[match_index .. match_index + query.len],
+                .match,
+            );
+
             break;
         }
     }
+}
+
+fn restoreSearchHighlight(allocator: std.mem.Allocator) void {
+    const saved = search_saved_highlight orelse return;
+    defer allocator.free(saved);
+
+    if (search_saved_highlight_line) |line| {
+        if (line < rows.items.len) {
+            const row = &rows.items[line];
+
+            if (row.highlight.len == saved.len) {
+                @memcpy(row.highlight, saved);
+            }
+        }
+    }
+
+    search_saved_highlight = null;
+    search_saved_highlight_line = null;
 }
 
 // ....
@@ -1098,6 +1183,8 @@ fn editorFind(
         coloff = saved_coloff;
     }
 
+    restoreSearchHighlight(allocator);
+
     search_last_match = null;
     search_direction = .forward;
 }
@@ -1120,4 +1207,31 @@ fn rowRxToCx(row: Row, rx: usize) usize {
     }
 
     return cx;
+}
+
+// ....
+fn updateSyntax(allocator: std.mem.Allocator, row: *Row) !void {
+    if (row.highlight.len > 0) {
+        allocator.free(row.highlight);
+    }
+
+    row.highlight = try allocator.alloc(Highlight, row.render.len);
+
+    @memset(row.highlight, .normal);
+
+    var i: usize = 0;
+    while (i < row.render.len) : (i += 1) {
+        if (std.ascii.isDigit(row.render[i])) {
+            row.highlight[i] = .number;
+        }
+    }
+}
+
+// ....
+fn syntaxToColor(highlight: Highlight) u8 {
+    return switch (highlight) {
+        .number => 31,
+        .match => 34,
+        .normal => 39,
+    };
 }

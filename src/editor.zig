@@ -1235,3 +1235,8 @@ fn syntaxToColor(highlight: Highlight) u8 {
         .normal => 39,
     };
 }
+
+fn isSeparator(c: u8) bool {
+    return std.ascii.isWhitespace(c) or c == 0 or
+        std.mem.indexOfScalar(u8, ",.()+-/*=~%<>[];", c) != null;
+}
